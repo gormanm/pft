@@ -1,0 +1,191 @@
+#!/bin/bash
+#
+#  Copyright (c) 2006, 2014 SGI. All rights reserved.
+#
+#  This program is free software; you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation; either version 3 of the License, or
+#  (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+#  You should have received a copy of the GNU General Public License
+#  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+# runpft:  run "page fault test" [mpol version] with varying number
+# of threads, from 1 to nr_cpus [>= 0.04a], to measure scalability.
+
+: ${PFT_MEMSIZE:=16g}
+: ${NOEXEC:=false}
+: ${VERBOSE:=false}
+
+: ${PFT:=pft}	# was pft_mpol
+
+DROP_CACHES=/proc/sys/vm/drop_caches
+
+# =========================================================
+# adjust_tag - replace sequences of spaces with single '-'
+adjust_tag()
+{
+	echo "$@" | sed 's/  */-/g'
+}
+
+# =============================================================================
+# vprint -- print args if verbosity enabled
+vprint()
+{
+	$VERBOSE || return
+	echo -e "$@" >&2
+}
+
+# =============================================================================
+# _do <command+args> -- conditionally show and/or execute command
+_do()
+{
+	declare _do_cmd="$@"
+	vprint "$_do_cmd"
+	$NOEXEC || eval "$_do_cmd"
+}
+
+# =========================================================
+# get_nr_cpus() -- return smaller of number of cpus in
+# /proc/cpuinfo and /proc/$$/status[Cpus_allowed]
+_each_chunk_of()
+{
+	echo "$1" | tr ',' ' '
+}
+get_nr_cpus()
+{
+	# actual present [on-line ?] cpus in /proc/cpuinfo:
+	local nr_cpus_info=$(cat /proc/cpuinfo | grep  '^processor' | wc -l)
+
+	# cpus_allowed -- hex string: [xxxxxxxx,]*xxxxxxxx
+	local castr=$(fgrep 'Cpus_allowed:' /proc/$$/status | awk '{print $2}')
+	local nr_cpus=0
+
+	# handle possible multiple 32-bit chunks.  We're just counting.
+	for mask in $(_each_chunk_of $castr); do
+		val=$( printf "%ld" 0x$mask)
+		#TODO:  will this work if 'sign bit' of val is set?
+		while [[ $val -ne 0 ]]; do
+			nr_cpus=$((nr_cpus + (val & 1)))
+			val=$((val >> 1))
+		done
+	done
+	[[ $nr_cpus -le $nr_cpus_info ]] || nr_cpus=$nr_cpus_info
+	echo "$nr_cpus"
+}
+
+
+
+# =========================================================
+#main()
+
+nr_cpus=$(get_nr_cpus)
+
+max_threads=$nr_cpus	# was $(( nr_cpus - 1 ))
+bind=
+fifo=
+mempol=
+shm=
+verbose=
+mlock=
+NRPT=1	# number of runs per thread count for averaging
+test_type=-t	# -t for threads, -n for tasks
+memsize=$PFT_MEMSIZE
+gb_per_task=1	# just in case...
+drop_pgcache=false
+i_am_root=false
+[[ $(id -u) -ne 0 ]] || i_am_root=true
+
+# process command line options:
+# Note:  all options except '-D' and '-N' are passed to pft_*
+OPTIONS="afg:lm:pvDN:nSL"
+while getopts $OPTIONS opt
+do
+	case $opt in
+	# N = number of runs per thread count for averaging
+	# see pft_to_agr_data
+	N)	NRPT=$OPTARG
+		;;
+
+	a)	bind=-a
+		;;
+	f)	fifo=-f
+		;;
+	g)	gb_per_task=$OPTARG
+		;;
+	l)	mlock=-l
+		;;
+	m)	memsize=$OPTARG
+		;;
+	n)	test_type=-n
+		;;
+	p)	mempol=-p
+		;;
+	D)	if $i_am_root; then
+			drop_pgcache=true;
+		else
+			echo "Not privileged:  -D [drop cache] ignored" >&2
+		fi
+		;;
+	S)	shm="${shm:-'-S'}" # don't overwrite '-L'
+		;;
+	L)	shm=-L;		# implies '-S'
+		;;
+	v)	verbose="$verbose -v"
+		;;
+	esac
+done
+
+## shift past any options to arguments:
+shift `expr $OPTIND - 1`
+
+tag="$(adjust_tag $@)"
+#echo "tag=$tag"
+
+declare -i nt=1 i=0
+declare title=
+[[ -z "$tag" ]] || title=-T
+
+cmd_pfx="$PFT $bind $fifo $mlock $mempol $shm $verbose"
+
+STOP_FILE=./pft_stop_file
+rm -f $STOP_FILE
+
+while [[ $nt -le $max_threads ]]
+do
+	declare cmd="$cmd_pfx $test_type $nt"
+	declare memopt="-m $memsize"
+	[[ "$memsize" -ne 0 ]] || memopt="-m $(( gb_per_task * nt ))"g
+
+	cmd="$cmd $memopt"
+
+	i=0
+	while [[ $i -lt $NRPT ]]
+	do
+		if [[ -f $STOP_FILE ]]; then
+			echo "Saw 'stop file' -- nr threads run $nti + $i/$NRPT" >&2
+			break
+		fi
+		if $drop_pgcache; then
+			_do "echo 1 >$DROP_CACHES"
+		fi
+		_do "$cmd $title $tag"
+		i=$(( i + 1 ))
+
+		# pass non-empty title, tag first time only
+		title=
+		tag=
+	done
+
+	nt=$(( nt + 1 ))
+done
+
+# blank line in case piping multiple runs to a single file.
+# needed by pft_to_agr_data script
+echo "";
+

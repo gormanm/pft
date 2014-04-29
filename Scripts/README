@@ -1,0 +1,48 @@
+Ad hoc pft automation scripts
+
+runpft - bash script to run page fault test with specified options
+a specified number of times [default 1] varying the task/thread
+count from 1 to the number of cpus allowed in /proc/<pid>/status
+"Cpus_allowed:" mask.
+
+The following scripts use runpft to run test from 1 to number of
+allowed cpus:
+
+	pft-multirun - old script; invoke runpft with varying
+		options:  anon+{default|w/ mpol}|shmem+{default|w/ mempol}
+		Emits "old style" annotations.  Not for use with
+		pft_plot.py
+	pft_task_thread - run task vs thread scalability test.
+		Emits pft_plot.py style markup.
+
+	pft_per_node - invoke runpft on each node w/ cpus
+		restricted to that node using:
+		"numactl --cpunodebind-<node> runpft ...".
+		Test per node scalability.  Emits pft_plot.py
+		style markup.
+
+The following scripts have their own internal version of runpft
+to vary task count while gathering stats, profile.  They ignore
+Cpus_allowed and attempt to run tests on all cpus in the system.
+These scripts emit pft_plot.py 'LEGEND' markup, but require
+manual editing to add PLOTID and [SUB]TITLEs.
+
+	pft_lockstats - requires debug kernel that supports
+		lockstats.
+	pft_profile - uses built in kernel profiler.  Clears
+		and stores profile for each load point.
+		Requires kernel be booted with "profile=N".
+	pft_vmstats - collects vmstat output during each load
+		point.
+
+pft_plot.py - python/matplotlib script to process output of the
+scripts above and produce a /.png' plot.  See help text.
+Always a "work in progress".
+
+rmshm	- hack to remove sysv shm segments should pft leave
+	some behind.  Quite indiscriminant.
+
+fmt_vmstats - used by pft_vmstats to pretty up the vmstat output
+for systems whose numbers exceed vmstat(1)'s field widths.
+Unfortunately, this output doesn't play nice with vmstat_plot.py
+[separate tool].

@@ -1,0 +1,139 @@
+N.B., this patch must not be merged!  It opens a big security hole
+by mapping unzeroed pages into user space.
+
+Temp hack to allow the page fault test program to disable __GFP_ZERO
+for allocating the test memory [anon, shmem].  This will eliminate
+clear_page() which dominates the profiles, exposing more of the
+allocator behavior [we hope].
+
+This version atop 2.6.29-rc8-mmotm-090323-2234
+
+Signed-off-by:  Lee Schermerhorn <lee.schermerhorn@hp.com>
+
+ arch/x86/include/asm/page.h |    2 +-
+ include/linux/mempolicy.h   |    3 ++-
+ include/linux/mm.h          |    2 ++
+ include/linux/pagemap.h     |   13 +++++++++++++
+ mm/mempolicy.c              |   19 ++++++++++++++++++-
+ mm/shmem.c                  |    3 +++
+ 6 files changed, 39 insertions(+), 3 deletions(-)
+
+Index: linux-2.6.29-rc8-mmotm-090323-2234/mm/mempolicy.c
+===================================================================
+--- linux-2.6.29-rc8-mmotm-090323-2234.orig/mm/mempolicy.c	2009-04-03 11:20:35.000000000 -0400
++++ linux-2.6.29-rc8-mmotm-090323-2234/mm/mempolicy.c	2009-04-03 11:29:17.000000000 -0400
+@@ -926,6 +926,17 @@ static struct page *new_vma_page(struct 
+ }
+ #endif
+ 
++static void vma_set_no_clear(unsigned long addr)
++{
++	struct vm_area_struct *vma = find_vma_intersection(current->mm,
++							   addr, addr+1);
++	if (vma) {
++		vma->vm_flags |= VM_NOCLEAR;
++		if (vma->vm_file)
++			mapping_set_no_clear(vma->vm_file->f_mapping);
++	}
++}
++
+ static long do_mbind(unsigned long start, unsigned long len,
+ 		     unsigned short mode, unsigned short mode_flags,
+ 		     nodemask_t *nmask, unsigned long flags)
+@@ -937,9 +948,15 @@ static long do_mbind(unsigned long start
+ 	int err;
+ 	LIST_HEAD(pagelist);
+ 
+-	if (flags & ~(unsigned long)(MPOL_MF_STRICT |
++	if (flags & ~(unsigned long)(MPOL_MF_STRICT | MPOL_MF_NOCLEAR |
+ 				     MPOL_MF_MOVE | MPOL_MF_MOVE_ALL))
+ 		return -EINVAL;
++
++	if (flags & MPOL_MF_NOCLEAR) {
++		vma_set_no_clear(start);
++		return 0;
++	}
++
+ 	if ((flags & MPOL_MF_MOVE_ALL) && !capable(CAP_SYS_NICE))
+ 		return -EPERM;
+ 
+Index: linux-2.6.29-rc8-mmotm-090323-2234/mm/shmem.c
+===================================================================
+--- linux-2.6.29-rc8-mmotm-090323-2234.orig/mm/shmem.c	2009-04-03 11:20:35.000000000 -0400
++++ linux-2.6.29-rc8-mmotm-090323-2234/mm/shmem.c	2009-04-03 11:32:13.000000000 -0400
+@@ -1149,6 +1149,9 @@ static struct page *shmem_alloc_page(gfp
+ 	pvma.vm_ops = NULL;
+ 	pvma.vm_policy = mpol_shared_policy_lookup(&info->policy, idx);
+ 
++	if (mapping_no_clear(info->vfs_inode.i_mapping))
++		gfp &= ~__GFP_ZERO;
++
+ 	/*
+ 	 * alloc_page_vma() will drop the shared policy reference
+ 	 */
+Index: linux-2.6.29-rc8-mmotm-090323-2234/include/linux/pagemap.h
+===================================================================
+--- linux-2.6.29-rc8-mmotm-090323-2234.orig/include/linux/pagemap.h	2009-04-03 11:20:35.000000000 -0400
++++ linux-2.6.29-rc8-mmotm-090323-2234/include/linux/pagemap.h	2009-04-03 11:21:00.000000000 -0400
+@@ -25,8 +25,21 @@ enum mapping_flags {
+ #ifdef CONFIG_UNEVICTABLE_LRU
+ 	AS_UNEVICTABLE	= __GFP_BITS_SHIFT + 3,	/* e.g., ramdisk, SHM_LOCK */
+ #endif
++	AS_NO_CLEAR	= __GFP_BITS_SHIFT + 4,	// temp for page fault testing
+ };
+ 
++static inline void mapping_set_no_clear(struct address_space *mapping)
++{
++	set_bit(AS_NO_CLEAR, &mapping->flags);
++}
++
++static inline int mapping_no_clear(struct address_space *mapping)
++{
++	if (likely(mapping))
++		return test_bit(AS_NO_CLEAR, &mapping->flags);
++	return !mapping;
++}
++
+ static inline void mapping_set_error(struct address_space *mapping, int error)
+ {
+ 	if (unlikely(error)) {
+Index: linux-2.6.29-rc8-mmotm-090323-2234/arch/x86/include/asm/page.h
+===================================================================
+--- linux-2.6.29-rc8-mmotm-090323-2234.orig/arch/x86/include/asm/page.h	2009-04-03 11:20:35.000000000 -0400
++++ linux-2.6.29-rc8-mmotm-090323-2234/arch/x86/include/asm/page.h	2009-04-03 11:23:13.000000000 -0400
+@@ -30,7 +30,7 @@ static inline void copy_user_page(void *
+ }
+ 
+ #define __alloc_zeroed_user_highpage(movableflags, vma, vaddr) \
+-	alloc_page_vma(GFP_HIGHUSER | __GFP_ZERO | movableflags, vma, vaddr)
++	alloc_page_vma(GFP_HIGHUSER | (vma_noclear(vma) ? 0 : __GFP_ZERO) | movableflags, vma, vaddr)
+ #define __HAVE_ARCH_ALLOC_ZEROED_USER_HIGHPAGE
+ 
+ #define __pa(x)		__phys_addr((unsigned long)(x))
+Index: linux-2.6.29-rc8-mmotm-090323-2234/include/linux/mm.h
+===================================================================
+--- linux-2.6.29-rc8-mmotm-090323-2234.orig/include/linux/mm.h	2009-04-03 11:15:14.000000000 -0400
++++ linux-2.6.29-rc8-mmotm-090323-2234/include/linux/mm.h	2009-04-03 11:24:03.000000000 -0400
+@@ -104,6 +104,8 @@ extern unsigned int kobjsize(const void 
+ #define VM_CAN_NONLINEAR 0x08000000	/* Has ->fault & does nonlinear pages */
+ #define VM_MIXEDMAP	0x10000000	/* Can contain "struct page" and pure PFN pages */
+ #define VM_SAO		0x20000000	/* Strong Access Ordering (powerpc) */
++#define VM_NOCLEAR	0x80000000	/* Debug:  don't zero/clear pages in this vma */
++#define vma_noclear(VMA) ((VMA)->vm_flags & VM_NOCLEAR)
+ 
+ #ifndef VM_STACK_DEFAULT_FLAGS		/* arch can override this */
+ #define VM_STACK_DEFAULT_FLAGS VM_DATA_DEFAULT_FLAGS
+Index: linux-2.6.29-rc8-mmotm-090323-2234/include/linux/mempolicy.h
+===================================================================
+--- linux-2.6.29-rc8-mmotm-090323-2234.orig/include/linux/mempolicy.h	2009-04-03 11:19:46.000000000 -0400
++++ linux-2.6.29-rc8-mmotm-090323-2234/include/linux/mempolicy.h	2009-04-03 11:25:26.000000000 -0400
+@@ -42,7 +42,8 @@ enum {
+ #define MPOL_MF_STRICT	(1<<0)	/* Verify existing pages in the mapping */
+ #define MPOL_MF_MOVE	(1<<1)	/* Move pages owned by this process to conform to mapping */
+ #define MPOL_MF_MOVE_ALL (1<<2)	/* Move every page to conform to mapping */
+-#define MPOL_MF_INTERNAL (1<<3)	/* Internal flags start here */
++#define MPOL_MF_NOCLEAR  (1<<3)	/* Debug:  don't clear pages in vma */
++#define MPOL_MF_INTERNAL (1<<4)	/* Internal flags start here */
+ 
+ /*
+  * Internal flags that share the struct mempolicy flags word with

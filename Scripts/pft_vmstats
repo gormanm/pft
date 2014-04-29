@@ -1,0 +1,111 @@
+#!/bin/bash
+#
+#  Copyright (c) 2006, 2014 SGI. All rights reserved.
+#
+#  This program is free software; you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation; either version 3 of the License, or
+#  (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+#  You should have received a copy of the GNU General Public License
+#  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+# for plot annotations
+PLATFORM=$(dmidecode -s system-product-name )
+if [[ -n "$PLATFORM" ]];  then
+	PLATFORM=$( echo "$PLATFORM" | awk '{print $1"-"$2$3;}')
+else
+	PLATFORM=Unknown
+fi
+
+# better way to determine nr_cpus?
+nr_cpus=$(cat /proc/cpuinfo | grep  '^processor' | wc -l)
+nr_nodes=$(ls -1d /sys/devices/system/node/node[0-9]* | wc -l)
+
+# os revision for pft "tag"
+osrev=$(uname -r)
+osrev=${osrev#2.6.}	# drop the 2.6.
+
+# Memory Size
+#MEMSIZE="-m 4g"
+MEMSIZE=
+GB_PER_TASK=8
+
+# Affinitize -- bind to cpus; use SCHED_FIFO
+BIND="-af"
+
+# Test type:  -n for tasks, nothing for threads
+TEST_TYPE= #-n
+
+TIMESTAMP="$(date +%y%m%d-%H%M%S)"
+
+reset_lockstats()
+{
+	echo 0 >/proc/lock_stat
+}
+
+enable_lockstats()
+{
+	echo 1 >/sys/module/lockdep/parameters/lock_stat
+}
+
+disable_lockstats()
+{
+	echo 0 >/sys/module/lockdep/parameters/lock_stat
+}
+
+
+outprefix=pft-$PLATFORM-$osrev-$TIMESTAMP
+
+STOP_FILE=./pft_stop_file
+
+# quick and dirty intenal version.
+# run pft varying task count from 1 .. nr_cpus
+runpft()
+{
+	local memtype=$1
+	local tag=MAP_ANON
+	local memsize=
+	[[ "$memtype" != "-Z" ]] || tag=dev_zero
+	local cmd=
+
+	rm -f $STOP_FILE
+	title=-T
+	echo "LEGEND $osrev $tag"
+	for nr_tasks in $(seq 1 $nr_cpus);
+	do
+		memsize=$MEMSIZE
+		[[ -n "$memsize" ]] || memsize="-m $(( GB_PER_TASK * nr_tasks ))g"
+		cmd="pft $BIND $memsize $memtype -n $nr_tasks $title"
+		echo "Command: $cmd " >&2
+		eval "$cmd"
+		title=
+		if [[ -f $STOP_FILE ]]; then
+			echo "Saw 'stop file'" >&2
+			break
+		fi
+	done
+	echo
+}
+
+# =====================================================================
+#main()
+
+fmt_vmstats 10 >$outprefix.vmstats &
+vmstat_pid="$!"
+
+{
+	# page faults using /dev/zero
+	runpft -Z
+
+	# page faults using MAP_ANON
+	[[ -f $STOP_FILE ]] || runpft
+
+} >$outprefix.pgfaults
+
+kill -s SIGQUIT $vmstat_pid

@@ -1,0 +1,159 @@
+The "overall operation" section is way out of date, sorry.
+Especially since restoration of multi-process version.
+Update is on the TODO list.  Version history below is more or
+less up to date.
+
+"pft" : Page Fault Test
+
+Originally by Chirstoph Lameter.
+
+Modified by Lee Schermerhorn [v0.2+] to measure relative overhead
+of memory policy changes:  reference counting, ...
+
+See "usage" in program source for command line options.
+
+Overall operation:
+
+1) parse options, calculate memory sizes, create "communications" area
+   in shared memory.
+
+2) fork a child to run test "launch()" function.  Originally, we did this
+   so we could use RUSAGE_CHILDREN to obtain accumulated statistics --
+   faults, ...   However, this included cpu time and faults from other
+   than the test loops that we're interested in.  We've changed how we
+   capture the wall clock time and the rusage, but we still launch() the
+   test workers [threads or processes] from a child process.
+   Wait for the child to exit.
+
+3) launch() function [in child]:
+   a) creates test region of specified size and type [anon vs shm];
+      optionally "mbind()s" test region to install a vma/shared mempolicy.
+      However, launch() does NOT touch the region, so as not to fault in
+      any pages.
+      Note:  if supported by kernel [requires patch] and enabled at build
+             time [e.g., NOCLEAR=-DUSE_NOCLEAR on make command line],
+             '-Z' option will cause launch() to mark region as "noclear",
+             eliminating the page zeroing overhead from the test.
+   b) sets launch() process' scheduler policy to SCHED_FIFO and it's
+      priority to 1 greater than will be used for worker threads/processes.
+   c) creates/starts specified number of threads to run the "test()"
+      function and "waits" for all threads to become "READY".  Threads
+      runs SCHED_FIFO on priority below the launch() thread.  The objective
+      is to allow a worker to run on each cpu. The launch() process/thread
+      runs as "worker 0".
+   d) gives all threads the "go ahead"; then run the test loop as worker 0.
+   e) When the test loop completes, loops waiting waiting to reap al
+      workers  As each worker terminates, select the start time [and rusage]
+      from the worker that started earliest, and the end time [and rusage]
+      from the worker that finished last.
+      Note:  for kernels that support RUSAGE_THREAD, pft_mpol uses that to
+             fetch each worker's rusage and sums the faults and cpu times
+             for all workers.
+   f) returns/exits
+
+4) test threads:
+   a) wait for "go ahead" from launch().
+   b) snap thread start time and start rusage into this thread's thread_info.
+   c) The measured test loop: either bzero() the thread's respective test
+      region or touch the specified number of cachelines per page therein.
+   d) snap the thread's end time and end rusage into this thread's thread_info.
+   e) sleep for specified delay -- default 2 sec.
+   f) indicates 'DONE in the per thread info area.
+   g) exits.
+
+5) main program returns from wait() when child/launch() exits, and
+   computes/emits results.
+
+----------------------------
+
+Helper scripts:
+
+See Scripts/README
+
+-------------------------------
+
+Version history:
+
+0.01  - first version of pft_mpol for testing mempolicy fault/allocation
+        overhead.
+
+0.02  - added support for agr [xmgrace] "tag"
+
+0.02a - enhancement to helper scripts to support multiple runs per thread
+        count and added usage string to pft_mpol. General "cleanup".
+
+0.03  - use mmap(MAP_ANONYMOUS) for anon test memory and parent/child comm area.
+        Added pft_mmap(), valloc_{private|shared}(), ... for this purpose.
+
+        Add support for "affinitizing" pft to cpus in hopes of obtaining more
+        repeatable results.
+
+        Factor out test memory allocation and thread creation from pft results:
+        snapshot launch() rusage just before giving threads the "go ahead",
+        subtract this usage from final RUSAGE_CHILDREN.
+
+        Added helper functions to compute elapses, cpu times as double to
+        "improve readability" of final results reporting.
+
+0.04 - In a further attempt to obtain repeatable and accurate results, changed
+       to capture the end rusage in each of the test threads themselves--just
+       after the test loops.
+
+       Snap the start time and start rusage of each thread into thread_info
+       after getting the "go ahead" from the parent, before the page fault
+       test loop.  Snap the end time and rusage after the test loop.
+       In the parent, as threads join, select the start time and start rusage
+       from the thread with the earlies start time, and the end time and end
+       rusage from the thread with the latest end wall clock time.
+
+       Compute difference between selected end and start rusage for determining
+       the cpu time used and the number of faults in the test loop
+
+0.05 - Add option to set scheduler policy of test threads, including the
+       launch thread to SCHED_FIFO.  Launch thread will run at one RT
+       (SCHED_FIFO) priority higher to maintain control while starting threads,
+       if nr_threads > nr_online_cpus.
+
+N.B., This is fragile.  And, SCHED_FIFO seems to introduce a wall clock time
+delay into the tests.  Under investigation.
+
+       Run "thread 0" test in launch() thread, after giving other threads
+       the go-ahead.
+
+0.06 - Add '-L' [SHM_LOCK] and '-l' [mlock] options to test fault rate for
+       noreclaim/mlock patches.  ['-L' also in 0.05?]
+
+0.07 - slight mods to emitted TAG and wrapper scripts to ease parsing for
+       new pft_plot script.
+
+0.08 - start adding back multi-process version to avoid mmap_sem on high cpu
+       counts.  Use RUSAGE_THREAD if available.
+
+0.09 - added support for "cpus_allowed" constraint on where tests run.  pft will
+       read /proc/self/status, if possible, and extract Cpus_allowed.  If the
+       numbers of cpus allowed is < the number on-line, pft will use the allowed
+       cpus.  Otherwise, it will use cpus 0..nr_cpus_online-1.  Allows taskset,
+       numactl or cpuset constraint on pft cpu usage.
+
+0.10 - added support for '-Z' flag to request kernel NOT to clear pages on
+       allocations, as clear_page() tends to dominate the profiles and time
+       to fault in a new page.  This will, one hopes, give us better visibility
+       into the behavior of the allocation path, separate from clear_page()
+       which should be fairly constant release-to-release for a given
+       platform.   This feature requires a kernel patch.  See ./Kernel/*
+       Uses a mbind() flag--MPOL_MF_NOCLEAR--to request no clearing of a
+       range of memory.  Actually just sets "noclear" for the vma that
+       intersects the mbind() 'start' address, if any.
+
+0.11 - use 'cpus_allowed' handling from aim/multitask.  Newer version.
+       + option to use /dev/zero mapping instead of MAP_ANONYMOUS.
+
+       add '-M' [multimap] support -- mmap() separate anon regions for each test
+       to eliminate anon_vma sharing	[WORK IN PROGRESS -- i.e, not quite working]
+
+0.12 - rework cpus_allowed to use more libnuma support instead of parsing
+       /proc/<pid>/status
+       N.B., uses 'numa_num_task_cpus()' which is broken in libnuma-2.0.3.
+       Requires 2.0.4 or patched libnuma.  See Libnuma/*
+       tweak various scripts:  pft_plot.py [no legend option], pft_per_node,
+       pft-task_thread => pft_task_thread.

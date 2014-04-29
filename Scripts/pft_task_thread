@@ -1,0 +1,84 @@
+#!/bin/bash
+#
+#  Copyright (c) 2006, 2014 SGI. All rights reserved.
+#
+#  This program is free software; you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation; either version 3 of the License, or
+#  (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+#  You should have received a copy of the GNU General Public License
+#  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+## pft-task_thread -- invoke runpft to run processes [-n]
+## and threads.
+## TODO:  rewrite to read config file [python?]
+
+# for plot annotations
+PLATFORM=$(dmidecode -s system-product-name)
+if [[ -n "$PLATFORM" ]];  then
+	PLATFORM=$( echo "$PLATFORM" | awk '{print $1"-"$2$3;}')
+else
+	PLATFORM=Unknown
+fi
+
+# better way to determine nr_cpus?
+nr_cpus=$(cat /proc/cpuinfo | grep  '^processor' | wc -l)
+nr_nodes=$(ls -1d /sys/devices/system/node/node[0-9]* | wc -l)
+
+# TESTING=true
+TESTING=false
+export NOEXEC=$TESTING VERBOSE=$TESTING
+
+RUNPFT="/usr/local/bin/runpft"
+
+# os revision for pft "tag"
+osrev=$(uname -r)
+#osrev=${osrev#2.6.}	# drop the 2.6.
+
+# Memory Size -- if not set, calc from  GB_PER_TASK * nr_tasks)
+#MEMSIZE="-m 4g"
+MEMSIZE="-m 0"
+GB_PER_TASK="-g 2"
+
+# Number of Runs Per Thread count:
+#NRPT="-N 10"
+NRPT="-N 4"
+
+# Affinitize -- bind to cpus; use SCHED_FIFO
+BIND="-af"
+
+# Test type:  -n for tasks, nothing for threads
+# not used herein
+#TEST_TYPE= #-n
+
+TIMESTAMP="$(date +%y%m%d-%H%M%S)"
+
+outprefix=pft_task_thread-$PLATFORM-$osrev-$TIMESTAMP
+
+
+# pft_mpol identifies shm [vs anon] and
+# sys default vs vma policy
+
+{
+	# pft_mpol build version/timestamp:
+	pft_mpol -V
+	echo "PLOTID dl785c_task_and_thread_pft"
+	echo "TITLE Task vs Thread Scalability"
+	echo "SUBTITLE $PLATFORM $osrev"
+
+	rm -f $STOP_FILE
+	# anon mem, sys default mpol, touch to fault
+	echo "LEGEND $osrev task"
+	$RUNPFT -n $NRPT $MEMSIZE $GB_PER_TASK $BIND "$osrev-task"
+
+	[[ ! -f $STOP_FILE ]] || exit
+	echo "LEGEND $osrev thread"
+	$RUNPFT    $NRPT $MEMSIZE $GB_PER_TASK $BIND "$osrev-thread"
+
+} >${outprefix}.pft 2>&1

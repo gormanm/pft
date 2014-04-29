@@ -1,0 +1,72 @@
+#!/bin/bash
+#
+#  Copyright (c) 2006, 2014 SGI. All rights reserved.
+#
+#  This program is free software; you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation; either version 3 of the License, or
+#  (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+#  You should have received a copy of the GNU General Public License
+#  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+## fmt_vmstats -- reformat vmstats output for large systems to align
+## numeric data with headers.
+
+## Usage:  fmt_vmstats <vmstat-args>
+#  e.g.,	fmt_vmstats -a -S M 10
+#  doesn't work for all possible vmstat args.
+
+# Note:  this needs at least 118 columns of screen to display all fields on one line
+
+# At some point, we may need to increase the field widths--again:
+
+#      1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678
+ hdr1="---procs---|----------------memory---------------|----swap-----|--------io-------|------system-----|-------cpu--------\n"
+ hdr2="_run_ _blk_|swpd ___free___ ___buff___ ___cache__|__si__ __so__|___bi___ ___bo___|___in___ ___cs___|usr sys idl wai st\n"
+hdr2a="_run_ _blk_|swpd ___free___ ___inact__ __active__|__si__ __so__|___bi___ ___bo___|___in___ ___cs___|usr sys idl wai st\n"
+fmt="%5d %5d|%4d %10d %10d %10d|%6d %6d|%8d %8d|%8d %8d|%3d %3d %3d %3d %2d %s\n"
+
+
+declare -i irun=
+declare VMSTAT=/usr/bin/vmstat
+
+
+if [[ $# -eq 0 ]]; then
+	echo -e "Usage:  fmt_vmstats <vmstat-args>\n\nRun vmstat with <vmstat-args> and format the output.\n"
+	exit 1
+fi
+
+# TODO:  add optional timestamps?
+$VMSTAT "$@" |
+while read run blk swpd free buff cache si so bi bo in cs us sy id wa st rest
+do
+	if [[ "$run" = "procs" ]]; then
+		printf -- "$hdr1"
+		continue
+	fi
+	if [[ "$run" = "r" ]]; then
+		if [[ "$buff" = "buff" ]]; then
+			printf "$hdr2"
+		elif [[ "$buff" = "inact" ]]; then
+			printf "$hdr2a"
+		else
+			echo "Sorry.  Don't recognize vmstat output format." >&2
+			exit 1
+		fi
+		continue
+	fi
+	irun=$run
+	if [[ "$irun" != "$run" ]]; then
+		# echo non-numeric lines
+		echo "$run $blk $swpd $free $buff $cache $si $so $bi $bo $in $cs $us $sy $id $wa $st $rest"
+		continue
+	fi
+	printf "$fmt" $run $blk $swpd $free $buff $cache $si $so $bi $bo $in $cs $us $sy $id $wa $st "$rest"
+
+done

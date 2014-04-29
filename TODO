@@ -1,0 +1,12 @@
+!!! update the README -- the only documentation we have.
+
+Signal handler for '-P' to catch/ignore SIG_INT
+
+-M -- mmap() so as to avoid sharing of anon vmas.  [not so easy].
+	work in progress as of 27jan2010
+	maybe not needed with RvR's private anon_vma patches.  TEST!
+
+Option [-A?] to bind tests to all cpus in a node before moving on to next node.
+Currently, cpuids are interleaved over nodes on [HP] x86_64 platforms where
+pft has been tested.
+
