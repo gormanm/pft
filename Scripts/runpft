@@ -160,7 +160,7 @@ while [[ $nt -le $max_threads ]]
 do
 	declare cmd="$cmd_pfx $test_type $nt"
 	declare memopt="-m $memsize"
-	[[ "$memsize" -ne 0 ]] || memopt="-m $(( gb_per_task * nt ))"g
+	[[ "X$memsize" -ne "X" ]] || memopt="-m $(( gb_per_task * nt ))"g
 
 	cmd="$cmd $memopt"
 
