@@ -146,7 +146,7 @@ struct pft_comm {
 
 #define ROUND_UP(x,y) (((x) + (y) - 1) & ~((y)-1))
 
-static  char*	OPTSTR = "ac:fhlm:n:ps:t:vzCFLNPSTVZ";
+static  char*	OPTSTR = "ac:fhlm:n:ps:t:vzCFLMNPSTVZ";
 static char *usage = "\n\
 Usage:  %s [-afhpvzCFLMNPSTVZ] [-c <cachelines>] [-m <size>[KMGP]]\n\
            [-s <sleep_seconds>] [{-n <nr_proc>|-t <nr_thread>}] [<tag>]\n\
@@ -158,13 +158,10 @@ Usage:  %s [-afhpvzCFLMNPSTVZ] [-c <cachelines>] [-m <size>[KMGP]]\n\
 	-z = bzero the per-thread memory area; else touch cachelines.\n\
 	-c <cachelines> = number of cachelines to touch if !-z.\n\
 	            configured cacheline size:  %d bytes.\n\
-	-l = mlock() the region instead of bzero or touch.\n"
-#if 0
-"\
+	-l = mlock() the region instead of bzero or touch.\n\
 	-M = mmap() separate regions for each test task/thread to avoid\n\
-	     anon_vma sharing.\n"
-#endif
-"	-S = use SysV shared memory test area; else anonymous test memory.\n\
+	     anon_vma sharing.\n\
+	-S = use SysV shared memory test area; else anonymous test memory.\n\
 	-L = SHM_LOCK the SysV shared memory test area.  Implies -S\n\n\
 	-n <nr_proc> = number of test processes.\n\
 	-t <nr_thread> = number of threads.\n\
@@ -756,8 +753,6 @@ alloc_test_memory(void)
 				do_noclear(p, bytes);
 			}
 		} else {
-#if 0
- / Not Ready for Prime Time -- maybe never
 			/*
 			 * multimap:  per test mmap area => separate anon_vmas
 			 */
@@ -797,7 +792,6 @@ alloc_test_memory(void)
 				} else
 					goto err;
 			}
-#endif
 		}
 	}
 
@@ -1491,14 +1485,12 @@ main(int argc, char *argv[])
 			}
 			break;
 
-#if 0
 		case 'M':	/* multimap - mmap() separate regions */
 			if (do_shm) {
 				vprint(0, "Ignoring '-M' for shmem\n");
 			}
 			multimap = pagesize;
 			break;
-#endif
 
 		case 'N':	/* dump numa_maps after test */
 			do_numa_maps++;
